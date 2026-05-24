@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Endless Pocong</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: black;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+
+<script>
+class SceneMenu extends Phaser.Scene {
+    constructor() {
+        super("SceneMenu");
+    }
+
+    preload() {
+        // LOAD IMAGES
+        this.load.image('bg_start', 'images/bg_start.png');
+        this.load.image('btn_play', 'images/btn_play.png');
+        this.load.image('title_game', 'images/title_game.png');
+        this.load.image('fg_loop', 'images/fg_loop.png');
+        this.load.image('fg_loop_back', 'images/fg_loop_back.png');
+        this.load.image('panel_skor', 'images/panel_skor.png');
+        this.load.image('chara', 'images/chara.png');
+        this.load.image('obstc', 'images/obstc.png');
+
+        // LOAD AUDIO
+        this.load.audio('klik', 'audio/klik_1.mp3');
+        this.load.audio('dead', 'audio/dead.mp3');
+    }
+
+    create() {
+        // Kotak hijau di bawah background utama
+        this.add.rectangle(512, 384, 200, 200, 0x00ff00)
+            .setAlpha(1)
+            .setDepth(0);
+
+        this.add.image(512, 384, 'bg_start').setDepth(1);
+        this.add.image(512, 170, 'title_game').setDepth(2);
+
+        let playBtn = this.add.image(512, 500, 'btn_play').setInteractive().setDepth(2);
+        playBtn.setScale(0.8);
+
+        playBtn.on('pointerdown', () => {
+            this.sound.play('klik');
+            this.scene.start('ScenePlay');
+        });
+    }
+}
+
+class ScenePlay extends Phaser.Scene {
+    constructor() {
+        super("ScenePlay");
+    }
+
+    removeWhiteBackground(sourceKey, targetKey, threshold = 240) {
+        const sourceTexture = this.textures.get(sourceKey);
+        if (!sourceTexture) {
+            return;
+        }
+
+        const sourceImage = sourceTexture.getSourceImage();
+        if (!sourceImage) {
+            return;
+        }
+
+        if (this.textures.exists(targetKey)) {
+            this.textures.remove(targetKey);
+        }
+
+        const width = sourceImage.width;
+        const height = sourceImage.height;
+        const canvasTexture = this.textures.createCanvas(targetKey, width, height);
+        canvasTexture.draw(0, 0, sourceImage);
+
+        const ctx = canvasTexture.getContext ? canvasTexture.getContext() : canvasTexture.context;
+        if (!ctx) {
+            return;
+        }
+
+        const imageData = ctx.getImageData(0, 0, width, height);
+        const pixels = imageData.data;
+
+        for (let i = 0; i < pixels.length; i += 4) {
+            if (pixels[i] >= threshold && pixels[i + 1] >= threshold && pixels[i + 2] >= threshold) {
+                pixels[i + 3] = 0;
+            }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+    }
+
+    create() {
+        this.score = 0;
+        this.gameOver = false;
+
+        // BACKGROUND (Awan/Belakang)
+        this.bg = this.add.tileSprite(512, 384, 1024, 768, 'fg_loop_back');
+
+        // GROUND / TANAH (Menggunakan Physics Static Group agar bisa dipijak)
+        this.platforms = this.physics.add.staticGroup();
+        this.land = this.add.tileSprite(512, 680, 1024, 200, 'fg_loop');
+        this.platforms.add(this.land);
+
+        // Hapus latar putih dari sprite pocong, lalu gunakan tekstur baru
+        this.removeWhiteBackground('chara', 'chara_no_bg', 240);
+
+        // PLAYER (Menggunakan Physics Sprite)
+        this.player = this.physics.add.sprite(200, 500, 'chara_no_bg');
+        this.player.setScale(0.5);
+        this.player.setCollideWorldBounds(true); // Tidak bisa keluar batas layar
+        this.player.setGravityY(1200); // Memberikan efek berat gravitasi saat jatuh
+
+        // Mengatur batas fisik tanah (agar pocong berdiri pas di atas permukaan tanah)
+        this.player.body.setOffset(0, 0);
+        this.physics.add.collider(this.player, this.platforms);
+
+        // OBSTACLES GROUP
+        this.obstacles = this.physics.add.group();
+
+        // SCORE PANEL + TEXT
+        this.add.image(180, 40, 'panel_skor').setDepth(3).setScrollFactor(0);
+        this.scoreText = this.add.text(120, 28, 'Score : 0', {
+            fontSize: '32px',
+            fill: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 4
+        }).setDepth(4).setScrollFactor(0);
+
+        // SPAWN OBSTACLES TIMER
+        this.time.addEvent({
+            delay: 1800,
+            callback: this.spawnObstacle,
+            callbackScope: this,
+            loop: true
+        });
+
+        // INPUT UNTUK LOMPAT (Hanya bisa melompat jika menyentuh tanah)
+        this.input.on('pointerdown', () => {
+            if (this.gameOver) return;
+            
+            // Cek jika menyentuh tanah
+            if (this.player.body.touching.down || this.player.y >= 540) {
+                this.player.setVelocityY(-550); // Kecepatan dorongan lompat ke atas
+                this.sound.play('klik', { volume: 0.5 });
+            }
+        });
+    }
+
+    spawnObstacle() {
+        if (this.gameOver) return;
+
+        // Spawn rintangan tepat di atas permukaan tanah
+        let obs = this.obstacles.create(1100, 550, 'obstc');
+        obs.setScale(0.5);
+        obs.body.setAllowGravity(false); // Rintangan tidak dipengaruhi gravitasi jatuh
+        obs.setVelocityX(-380); // Kecepatan rintangan bergerak ke kiri
+    }
+
+    update() {
+        if (this.gameOver) return;
+
+        // Menggulung background & tanah jalan raya
+        this.bg.tilePositionX += 1;
+        this.land.tilePositionX += 6;
+
+        // Logika perulangan memeriksa rintangan luar layar & tabrakan
+        this.obstacles.getChildren().forEach((obs) => {
+            // Hapus jika lolos ke kiri layar
+            if (obs.x < -100) {
+                obs.destroy();
+                this.score++;
+                this.scoreText.setText('Score : ' + this.score);
+            }
+
+            // DETEKSI COLLISION JAUH LEBIH AKURAT
+            if (Phaser.Math.Distance.Between(this.player.x, this.player.y, obs.x, obs.y) < 65) {
+                this.gameOver = true;
+                this.player.setVelocityY(0); // -> DIPERBAIKI dari setVelocityV menjadi setVelocityY
+                this.obstacles.setVelocityX(0);
+                this.sound.play('dead');
+                
+                this.scene.start('SceneGameOver', { score: this.score });
+            }
+        });
+    }
+}
+
+class SceneGameOver extends Phaser.Scene {
+    constructor() {
+        super("SceneGameOver");
+    }
+
+    init(data) {
+        this.finalScore = data.score || 0;
+    }
+
+    create() {
+        // Efek Overlay Hitam Transparan
+        this.add.rectangle(512, 384, 1024, 768, 0x000000, 0.7);
+
+        this.add.text(512, 250, 'GAME OVER', {
+            fontSize: '72px',
+            fill: '#ff0000',
+            fontWeight: 'bold'
+        }).setOrigin(0.5);
+
+        this.add.text(512, 360, 'Score : ' + this.finalScore, {
+            fontSize: '42px',
+            fill: '#ffffff'
+        }).setOrigin(0.5);
+
+        // Tombol Main Lagi
+        let ulang = this.add.text(512, 500, 'MAIN LAGI', {
+            fontSize: '40px',
+            fill: '#ffffff',
+            backgroundColor: '#00aa00',
+            padding: { x: 20, y: 10 }
+        })
+        .setOrigin(0.5)
+        .setInteractive();
+
+        // Efek Hover Tombol
+        ulang.on('pointerover', () => ulang.setStyle({ fill: '#ffff00' }));
+        ulang.on('pointerout', () => ulang.setStyle({ fill: '#ffffff' }));
+
+        ulang.on('pointerdown', () => {
+            this.scene.start('ScenePlay');
+        });
+    }
+}
+
+// CONFIG GAME (Menambahkan sistem Arcade Physics)
+const config = {
+    type: Phaser.AUTO,
+    width: 1024,
+    height: 768,
+    scale: {
+        mode: Phaser.Scale.FIT,
+        autoCenter: Phaser.Scale.CENTER_BOTH
+    },
+    physics: {
+        default: 'arcade', // -> DIPERBAIKI: Mengaktifkan modul sistem fisika arcade
+        arcade: {
+            gravity: { y: 0 },
+            debug: false 
+        }
+    },
+    scene: [SceneMenu, ScenePlay, SceneGameOver]
+};
+
+const game = new Phaser.Game(config);
+</script>
+
+</body>
+</html>
